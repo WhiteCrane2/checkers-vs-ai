@@ -18,15 +18,13 @@ final int CELL = 70;
 final int OFFX = 30, OFFY = 110;
 final int AI_DELAY_MS = 2000; // flat artificial "thinking" pause, same on every difficulty
 
-// Difficulty = search depth, plus a chance of a deliberately weaker move on Easy.
 final int[] DEPTHS       = {2, 6, 8, 10};
-final float[] RANDOMNESS = {0.45f, 0f, 0f, 0f}; // chance Easy ignores the best move
-final float BLUNDER_CHANCE = 1.0f / 25.0f; // on every difficulty, a 1-in-25 chance the AI deliberately plays its worst move
+final float[] RANDOMNESS = {0.45f, 0f, 0f, 0f};
+final float BLUNDER_CHANCE = 1.0f / 25.0f;
 final String[] DIFF_NAMES = {"Easy", "Medium", "Hard", "Insane"};
-int difficulty = 1; // 0=Easy, 1=Medium (default), 2=Hard, 3=Insane
+int difficulty = 1;
 
-// ---- slide animation state ----
-final int ANIM_STEP_MS = 220; // duration of a single hop (a multi-jump animates hop by hop)
+final int ANIM_STEP_MS = 220;
 boolean animating = false;
 Move animMove = null;
 boolean animIsRedMove = false;
@@ -35,7 +33,7 @@ int animStepStart = 0;
 int animPieceType = 0;
 
 int[][] board = new int[SIZE][SIZE];
-boolean redTurn = true;      // human (red) moves first
+boolean redTurn = true;
 boolean gameOver = false;
 String statusMsg = "";
 boolean aiPending = false;
@@ -49,7 +47,6 @@ class Move {
   ArrayList<int[]> captured = new ArrayList<int[]>();
 }
 
-// =========================================================================
 void setup() {
   size(620, 780);
   surface.setTitle("Checkers vs AI");
@@ -77,20 +74,32 @@ void initBoard() {
   statusMsg = "Your move (red)";
 }
 
-// =========================================================================
 void draw() {
-  updateAnimation();
+  if (chessMode) updateCAnimation(); else updateAnimation();
 
   background(40);
   drawBoard();
-  drawPieces();
-  drawAnimPiece();
-  drawHighlights();
+  if (chessMode) {
+    drawCPieces();
+    drawCAnimPiece();
+    drawCHighlights();
+  } else {
+    drawPieces();
+    drawAnimPiece();
+    drawHighlights();
+  }
   drawUI();
 
-  if (!animating && aiPending && millis() - aiPendingStart >= AI_DELAY_MS) {
-    aiPending = false;
-    performAIMove();
+  if (chessMode) {
+    if (!cAnimating && cAiPending && millis() - cAiPendingStart >= AI_DELAY_MS) {
+      cAiPending = false;
+      performCAIMove();
+    }
+  } else {
+    if (!animating && aiPending && millis() - aiPendingStart >= AI_DELAY_MS) {
+      aiPending = false;
+      performAIMove();
+    }
   }
 }
 
@@ -154,7 +163,7 @@ void drawUI() {
   fill(255);
   textAlign(CENTER, CENTER);
   textSize(20);
-  text(statusMsg, width / 2, 22);
+  text(chessMode ? cStatusMsg : statusMsg, width / 2, 22);
 
   drawDifficultyButtons();
 
@@ -166,6 +175,15 @@ void drawUI() {
   noStroke();
   textSize(15);
   text("New Game", width / 2, height - 29);
+
+  fill(90, 140, 220);
+  stroke(255);
+  strokeWeight(1);
+  rect(width - 170, height - 46, 150, 34, 8);
+  fill(20);
+  noStroke();
+  textSize(14);
+  text(chessMode ? "Switch to Checkers" : "Switch to Chess", width - 95, height - 29);
 }
 
 float diffBtnX(int i) { return 35 + i * 140; }
@@ -186,16 +204,13 @@ void drawDifficultyButtons() {
   }
 }
 
-// =========================================================================
-// SLIDE ANIMATION
-// =========================================================================
 void startAnimation(Move m, boolean wasRedMove) {
   animMove = m;
   animIsRedMove = wasRedMove;
   animIndex = 0;
   animStepStart = millis();
   int[] src = m.path.get(0);
-  animPieceType = board[src[0]][src[1]]; // board not mutated yet - safe to read here
+  animPieceType = board[src[0]][src[1]];
   animating = true;
 }
 
@@ -217,7 +232,7 @@ void drawAnimPiece() {
   int[] from = animMove.path.get(animIndex);
   int[] to = animMove.path.get(animIndex + 1);
   float t = constrain((millis() - animStepStart) / (float) ANIM_STEP_MS, 0, 1);
-  float te = t * t * (3 - 2 * t); // smoothstep easing
+  float te = t * t * (3 - 2 * t);
 
   float cx = lerp(OFFX + from[1] * CELL + CELL / 2.0f, OFFX + to[1] * CELL + CELL / 2.0f, te);
   float cy = lerp(OFFY + from[0] * CELL + CELL / 2.0f, OFFY + to[0] * CELL + CELL / 2.0f, te);
@@ -241,8 +256,6 @@ void drawAnimPiece() {
   }
 }
 
-// while mid-slide, hide the square the piece departed from, plus any
-// enemy pieces already jumped over so far in a multi-jump
 boolean isHiddenDuringAnim(int r, int c) {
   if (!animating) return false;
   int[] src = animMove.path.get(0);
@@ -254,8 +267,6 @@ boolean isHiddenDuringAnim(int r, int c) {
   return false;
 }
 
-// called once the slide reaches its final square: commits the move to the
-// real board and runs the same post-move logic the old instant-move code did
 void finishAnimatedMove() {
   board = applyMove(board, animMove);
   boolean wasRed = animIsRedMove;
@@ -285,9 +296,6 @@ void finishAnimatedMove() {
   }
 }
 
-// =========================================================================
-// PIECE HELPERS
-// =========================================================================
 boolean isRed(int p)   { return p == RED || p == RED_KING; }
 boolean isBlack(int p) { return p == BLACK || p == BLACK_KING; }
 boolean isKing(int p)  { return p == RED_KING || p == BLACK_KING; }
@@ -298,7 +306,7 @@ int[][] jumpDirs(int piece) {
     return new int[][]{{-1,-1},{-1,1},{1,-1},{1,1}};
   if (piece == RED)
     return new int[][]{{-1,-1},{-1,1}};
-  return new int[][]{{1,-1},{1,1}}; // BLACK man
+  return new int[][]{{1,-1},{1,1}};
 }
 
 int[][] copyBoard(int[][] b) {
@@ -307,11 +315,6 @@ int[][] copyBoard(int[][] b) {
   return nb;
 }
 
-// =========================================================================
-// MOVE GENERATION
-// =========================================================================
-// Captures are optional now: this returns every legal move (jumps AND plain
-// steps) for the side, rather than forcing a jump whenever one is available.
 ArrayList<Move> getAllMoves(int[][] b, boolean redSide) {
   ArrayList<Move> moves = new ArrayList<Move>();
 
@@ -347,7 +350,6 @@ ArrayList<Move> getAllMoves(int[][] b, boolean redSide) {
   return moves;
 }
 
-// recursively extends a jump sequence; records a Move each time a branch runs out of further jumps
 void findCaptures(int[][] b, int r, int c, ArrayList<int[]> path, ArrayList<int[]> captured, ArrayList<Move> results, boolean redSide) {
   int piece = b[r][c];
   boolean found = false;
@@ -400,9 +402,6 @@ int[][] applyMove(int[][] b, Move m) {
   return nb;
 }
 
-// =========================================================================
-// AI: minimax with alpha-beta pruning (maximizes for BLACK)
-// =========================================================================
 float evaluate(int[][] b) {
   float score = 0;
   for (int r = 0; r < SIZE; r++) {
@@ -419,7 +418,7 @@ float evaluate(int[][] b) {
 
 float minimax(int[][] b, int depth, float alpha, float beta, boolean blackToMove) {
   ArrayList<Move> moves = getAllMoves(b, !blackToMove);
-  if (moves.isEmpty()) return blackToMove ? -1000 : 1000; // side to move has no moves = they lose
+  if (moves.isEmpty()) return blackToMove ? -1000 : 1000;
   if (depth == 0) return evaluate(b);
 
   if (blackToMove) {
@@ -470,12 +469,9 @@ void performAIMove() {
 
   Move chosenMove = bestMove;
 
-  // Easy occasionally throws away the best move in favor of a random legal one
   if (random(1) < RANDOMNESS[difficulty]) {
     chosenMove = moves.get(int(random(moves.size())));
   }
-  // every difficulty has a small chance of deliberately walking into its
-  // worst available spot, so the AI isn't flawless even on Hard/Insane
   else if (random(1) < BLUNDER_CHANCE) {
     chosenMove = worstMove;
   }
@@ -483,15 +479,32 @@ void performAIMove() {
   startAnimation(chosenMove, false);
 }
 
-// =========================================================================
-// INTERACTION
-// =========================================================================
 void mousePressed() {
   for (int i = 0; i < 4; i++) {
     if (hit(diffBtnX(i), 48, 130, 28)) {
       difficulty = i;
       return;
     }
+  }
+
+  if (hit(width - 170, height - 46, 150, 34)) {
+    toggleMode();
+    return;
+  }
+
+  if (chessMode) {
+    if (cAnimating) return;
+    if (hit(width / 2 - 70, height - 46, 140, 34)) {
+      initChessBoard();
+      return;
+    }
+    if (cGameOver || !whiteTurn || cAiPending) return;
+
+    int ccol = (mouseX - OFFX) / CELL;
+    int crow = (mouseY - OFFY) / CELL;
+    if (!inBounds(crow, ccol)) return;
+    handleChessClick(crow, ccol);
+    return;
   }
 
   if (animating) return;
@@ -531,7 +544,6 @@ void mousePressed() {
       selR = -1; selectedMoves.clear();
       startAnimation(chosen, true);
     } else if (isRed(board[row][col])) {
-      // clicked a different one of your pieces - try reselecting
       ArrayList<Move> allRed = getAllMoves(board, true);
       ArrayList<Move> forThis = new ArrayList<Move>();
       for (Move m : allRed) {
@@ -548,4 +560,429 @@ void mousePressed() {
 
 boolean hit(float x, float y, float w, float h) {
   return mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
+}
+
+// =========================================================================
+// CHESS MODE
+// =========================================================================
+final int PAWN = 1, KNIGHT = 2, BISHOP = 3, ROOK = 4, QUEEN = 5, KING = 6;
+final int[] CHESS_DEPTHS = {1, 2, 3, 4};
+
+boolean chessMode = false;
+
+int[][] cboard = new int[SIZE][SIZE];
+boolean whiteTurn = true;
+boolean cGameOver = false;
+String cStatusMsg = "";
+boolean cAiPending = false;
+int cAiPendingStart = -1;
+
+boolean wKingMoved = false, bKingMoved = false;
+boolean wRookAMoved = false, wRookHMoved = false, bRookAMoved = false, bRookHMoved = false;
+int epTargetR = -1, epTargetC = -1, epPawnR = -1, epPawnC = -1;
+
+int cSelR = -1, cSelC = -1;
+ArrayList<CMove> cSelMoves = new ArrayList<CMove>();
+
+boolean cAnimating = false;
+CMove cAnimMove = null;
+boolean cAnimWasWhite = false;
+int cAnimStepStart = 0;
+int cAnimPieceType = 0;
+final int CANIM_MS = 260;
+
+class CMove {
+  int fr, fc, tr, tc;
+  boolean castleK = false, castleQ = false, enPassant = false;
+  int epCapR = -1, epCapC = -1;
+}
+
+void initChessBoard() {
+  for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++) cboard[r][c] = 0;
+  int[] order = {ROOK, KNIGHT, BISHOP, QUEEN, KING, BISHOP, KNIGHT, ROOK};
+  for (int c = 0; c < 8; c++) {
+    cboard[0][c] = -order[c];
+    cboard[1][c] = -PAWN;
+    cboard[6][c] = PAWN;
+    cboard[7][c] = order[c];
+  }
+  whiteTurn = true;
+  cGameOver = false;
+  cAiPending = false;
+  cAnimating = false;
+  cSelR = -1; cSelC = -1; cSelMoves.clear();
+  wKingMoved = false; bKingMoved = false;
+  wRookAMoved = false; wRookHMoved = false; bRookAMoved = false; bRookHMoved = false;
+  epTargetR = -1; epTargetC = -1; epPawnR = -1; epPawnC = -1;
+  cStatusMsg = "Your move (white)";
+}
+
+void toggleMode() {
+  chessMode = !chessMode;
+  if (chessMode) {
+    initChessBoard();
+    surface.setTitle("Chess vs AI");
+  } else {
+    initBoard();
+    surface.setTitle("Checkers vs AI");
+  }
+}
+
+boolean cWhite(int p) { return p > 0; }
+int cType(int p) { return abs(p); }
+
+CMove cm(int fr, int fc, int tr, int tc) {
+  CMove m = new CMove();
+  m.fr = fr; m.fc = fc; m.tr = tr; m.tc = tc;
+  return m;
+}
+
+ArrayList<CMove> genBasicMoves(int[][] b, int r, int c) {
+  ArrayList<CMove> out = new ArrayList<CMove>();
+  int p = b[r][c];
+  if (p == 0) return out;
+  boolean white = cWhite(p);
+  int type = cType(p);
+
+  if (type == PAWN) {
+    int dir = white ? -1 : 1;
+    int startRow = white ? 6 : 1;
+    if (inBounds(r + dir, c) && b[r + dir][c] == 0) {
+      out.add(cm(r, c, r + dir, c));
+      if (r == startRow && b[r + 2 * dir][c] == 0) out.add(cm(r, c, r + 2 * dir, c));
+    }
+    for (int dc = -1; dc <= 1; dc += 2) {
+      int nr = r + dir, nc = c + dc;
+      if (inBounds(nr, nc) && b[nr][nc] != 0 && cWhite(b[nr][nc]) != white) out.add(cm(r, c, nr, nc));
+    }
+  } else if (type == KNIGHT) {
+    int[][] offs = {{-2,-1},{-2,1},{-1,-2},{-1,2},{1,-2},{1,2},{2,-1},{2,1}};
+    for (int[] o : offs) {
+      int nr = r + o[0], nc = c + o[1];
+      if (inBounds(nr, nc) && (b[nr][nc] == 0 || cWhite(b[nr][nc]) != white)) out.add(cm(r, c, nr, nc));
+    }
+  } else if (type == KING) {
+    for (int dr = -1; dr <= 1; dr++) for (int dc = -1; dc <= 1; dc++) {
+      if (dr == 0 && dc == 0) continue;
+      int nr = r + dr, nc = c + dc;
+      if (inBounds(nr, nc) && (b[nr][nc] == 0 || cWhite(b[nr][nc]) != white)) out.add(cm(r, c, nr, nc));
+    }
+  } else {
+    int[][] dirs;
+    if (type == BISHOP) dirs = new int[][]{{-1,-1},{-1,1},{1,-1},{1,1}};
+    else if (type == ROOK) dirs = new int[][]{{-1,0},{1,0},{0,-1},{0,1}};
+    else dirs = new int[][]{{-1,-1},{-1,1},{1,-1},{1,1},{-1,0},{1,0},{0,-1},{0,1}};
+    for (int[] d : dirs) {
+      int nr = r + d[0], nc = c + d[1];
+      while (inBounds(nr, nc)) {
+        if (b[nr][nc] == 0) {
+          out.add(cm(r, c, nr, nc));
+        } else {
+          if (cWhite(b[nr][nc]) != white) out.add(cm(r, c, nr, nc));
+          break;
+        }
+        nr += d[0]; nc += d[1];
+      }
+    }
+  }
+  return out;
+}
+
+ArrayList<CMove> genSimpleMoves(int[][] b, boolean white) {
+  ArrayList<CMove> out = new ArrayList<CMove>();
+  for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++) {
+    int p = b[r][c];
+    if (p == 0 || cWhite(p) != white) continue;
+    out.addAll(genBasicMoves(b, r, c));
+  }
+  return out;
+}
+
+boolean isSquareAttacked(int[][] b, int r, int c, boolean byWhite) {
+  for (int r2 = 0; r2 < SIZE; r2++) for (int c2 = 0; c2 < SIZE; c2++) {
+    int p = b[r2][c2];
+    if (p == 0 || cWhite(p) != byWhite) continue;
+    int type = cType(p);
+    if (type == PAWN) {
+      int dir = byWhite ? -1 : 1;
+      if (r2 + dir == r && abs(c2 - c) == 1) return true;
+    } else {
+      for (CMove m : genBasicMoves(b, r2, c2)) if (m.tr == r && m.tc == c) return true;
+    }
+  }
+  return false;
+}
+
+int[] findKing(int[][] b, boolean white) {
+  for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++)
+    if (b[r][c] == (white ? KING : -KING)) return new int[]{r, c};
+  return new int[]{-1, -1};
+}
+
+ArrayList<CMove> getLegalChessMoves(boolean white) {
+  ArrayList<CMove> raw = new ArrayList<CMove>();
+  for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++) {
+    int p = cboard[r][c];
+    if (p == 0 || cWhite(p) != white) continue;
+    raw.addAll(genBasicMoves(cboard, r, c));
+  }
+
+  if (epTargetR != -1) {
+    int row = white ? 3 : 4;
+    if (epPawnR == row) {
+      for (int dc = -1; dc <= 1; dc += 2) {
+        int c = epPawnC + dc;
+        if (inBounds(row, c) && cboard[row][c] == (white ? PAWN : -PAWN)) {
+          CMove m = cm(row, c, epTargetR, epTargetC);
+          m.enPassant = true; m.epCapR = epPawnR; m.epCapC = epPawnC;
+          raw.add(m);
+        }
+      }
+    }
+  }
+
+  int homeRow = white ? 7 : 0;
+  boolean kingMoved = white ? wKingMoved : bKingMoved;
+  boolean rookAMoved = white ? wRookAMoved : bRookAMoved;
+  boolean rookHMoved = white ? wRookHMoved : bRookHMoved;
+  if (!kingMoved && cboard[homeRow][4] == (white ? KING : -KING) && !isSquareAttacked(cboard, homeRow, 4, !white)) {
+    if (!rookHMoved && cboard[homeRow][7] == (white ? ROOK : -ROOK) && cboard[homeRow][5] == 0 && cboard[homeRow][6] == 0
+        && !isSquareAttacked(cboard, homeRow, 5, !white) && !isSquareAttacked(cboard, homeRow, 6, !white)) {
+      CMove m = cm(homeRow, 4, homeRow, 6); m.castleK = true; raw.add(m);
+    }
+    if (!rookAMoved && cboard[homeRow][0] == (white ? ROOK : -ROOK) && cboard[homeRow][1] == 0 && cboard[homeRow][2] == 0 && cboard[homeRow][3] == 0
+        && !isSquareAttacked(cboard, homeRow, 3, !white) && !isSquareAttacked(cboard, homeRow, 2, !white)) {
+      CMove m = cm(homeRow, 4, homeRow, 2); m.castleQ = true; raw.add(m);
+    }
+  }
+
+  ArrayList<CMove> legal = new ArrayList<CMove>();
+  for (CMove m : raw) {
+    int[][] sim = copyBoard(cboard);
+    simApplyCMove(sim, m);
+    int[] k = findKing(sim, white);
+    if (!isSquareAttacked(sim, k[0], k[1], !white)) legal.add(m);
+  }
+  return legal;
+}
+
+void simApplyCMove(int[][] b, CMove m) {
+  int piece = b[m.fr][m.fc];
+  b[m.fr][m.fc] = 0;
+  if (m.enPassant) b[m.epCapR][m.epCapC] = 0;
+  if (m.castleK) { b[m.fr][5] = b[m.fr][7]; b[m.fr][7] = 0; }
+  if (m.castleQ) { b[m.fr][3] = b[m.fr][0]; b[m.fr][0] = 0; }
+  if (cType(piece) == PAWN && (m.tr == 0 || m.tr == 7)) piece = cWhite(piece) ? QUEEN : -QUEEN;
+  b[m.tr][m.tc] = piece;
+}
+
+void applyCMoveReal(CMove m) {
+  int piece = cboard[m.fr][m.fc];
+  boolean wasDoublePawn = cType(piece) == PAWN && abs(m.tr - m.fr) == 2;
+
+  simApplyCMove(cboard, m);
+
+  if (cType(piece) == KING) { if (cWhite(piece)) wKingMoved = true; else bKingMoved = true; }
+  if (cType(piece) == ROOK) {
+    if (m.fr == 7 && m.fc == 0) wRookAMoved = true;
+    if (m.fr == 7 && m.fc == 7) wRookHMoved = true;
+    if (m.fr == 0 && m.fc == 0) bRookAMoved = true;
+    if (m.fr == 0 && m.fc == 7) bRookHMoved = true;
+  }
+
+  if (wasDoublePawn) {
+    epTargetR = (m.fr + m.tr) / 2;
+    epTargetC = m.fc;
+    epPawnR = m.tr;
+    epPawnC = m.fc;
+  } else {
+    epTargetR = -1; epTargetC = -1; epPawnR = -1; epPawnC = -1;
+  }
+}
+
+float cEvaluate(int[][] b) {
+  float score = 0;
+  for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++) {
+    int p = b[r][c];
+    if (p == 0) continue;
+    int t = cType(p);
+    float v;
+    if (t == PAWN) v = 1;
+    else if (t == KNIGHT) v = 3;
+    else if (t == BISHOP) v = 3.1f;
+    else if (t == ROOK) v = 5;
+    else if (t == QUEEN) v = 9;
+    else v = 1000;
+    score += cWhite(p) ? -v : v;
+  }
+  return score;
+}
+
+float cMinimax(int[][] b, int depth, float alpha, float beta, boolean whiteToMove) {
+  if (depth == 0) return cEvaluate(b);
+  ArrayList<CMove> moves = genSimpleMoves(b, whiteToMove);
+  if (moves.isEmpty()) return cEvaluate(b);
+
+  if (!whiteToMove) {
+    float best = -Float.MAX_VALUE;
+    for (CMove m : moves) {
+      int[][] nb = copyBoard(b);
+      simApplyCMove(nb, m);
+      float score = cMinimax(nb, depth - 1, alpha, beta, true);
+      best = max(best, score);
+      alpha = max(alpha, best);
+      if (beta <= alpha) break;
+    }
+    return best;
+  } else {
+    float best = Float.MAX_VALUE;
+    for (CMove m : moves) {
+      int[][] nb = copyBoard(b);
+      simApplyCMove(nb, m);
+      float score = cMinimax(nb, depth - 1, alpha, beta, false);
+      best = min(best, score);
+      beta = min(beta, best);
+      if (beta <= alpha) break;
+    }
+    return best;
+  }
+}
+
+void performCAIMove() {
+  ArrayList<CMove> moves = getLegalChessMoves(false);
+  if (moves.isEmpty()) {
+    cGameOver = true;
+    int[] k = findKing(cboard, false);
+    cStatusMsg = isSquareAttacked(cboard, k[0], k[1], true) ? "Checkmate! You win." : "Stalemate - it's a draw.";
+    return;
+  }
+
+  int depth = CHESS_DEPTHS[difficulty];
+  float bestScore = -Float.MAX_VALUE, worstScore = Float.MAX_VALUE;
+  CMove bestMove = moves.get(0), worstMove = moves.get(0);
+  for (CMove m : moves) {
+    int[][] nb = copyBoard(cboard);
+    simApplyCMove(nb, m);
+    float score = cMinimax(nb, depth - 1, -Float.MAX_VALUE, Float.MAX_VALUE, true);
+    if (score > bestScore) { bestScore = score; bestMove = m; }
+    if (score < worstScore) { worstScore = score; worstMove = m; }
+  }
+
+  CMove chosen = bestMove;
+  if (random(1) < RANDOMNESS[difficulty]) chosen = moves.get(int(random(moves.size())));
+  else if (random(1) < BLUNDER_CHANCE) chosen = worstMove;
+
+  startCAnimation(chosen, false);
+}
+
+void startCAnimation(CMove m, boolean wasWhite) {
+  cAnimMove = m;
+  cAnimWasWhite = wasWhite;
+  cAnimStepStart = millis();
+  cAnimPieceType = cboard[m.fr][m.fc];
+  cAnimating = true;
+}
+
+void updateCAnimation() {
+  if (!cAnimating) return;
+  if (millis() - cAnimStepStart >= CANIM_MS) finishCAnimatedMove();
+}
+
+void finishCAnimatedMove() {
+  applyCMoveReal(cAnimMove);
+  boolean wasWhite = cAnimWasWhite;
+  cAnimating = false;
+  cAnimMove = null;
+
+  boolean nextWhite = !wasWhite;
+  ArrayList<CMove> nextMoves = getLegalChessMoves(nextWhite);
+  int[] k = findKing(cboard, nextWhite);
+  boolean inCheck = isSquareAttacked(cboard, k[0], k[1], !nextWhite);
+
+  if (nextMoves.isEmpty()) {
+    cGameOver = true;
+    if (inCheck) cStatusMsg = nextWhite ? "Checkmate! AI wins." : "Checkmate! You win.";
+    else cStatusMsg = "Stalemate - it's a draw.";
+    return;
+  }
+
+  whiteTurn = nextWhite;
+  if (nextWhite) {
+    cStatusMsg = inCheck ? "Check! Your move (white)" : "Your move (white)";
+  } else {
+    cStatusMsg = inCheck ? "Check! AI is thinking..." : "AI is thinking...";
+    cAiPending = true;
+    cAiPendingStart = millis();
+  }
+}
+
+void drawCAnimPiece() {
+  if (!cAnimating) return;
+  float t = constrain((millis() - cAnimStepStart) / (float) CANIM_MS, 0, 1);
+  float te = t * t * (3 - 2 * t);
+  float cx = lerp(OFFX + cAnimMove.fc * CELL + CELL / 2.0f, OFFX + cAnimMove.tc * CELL + CELL / 2.0f, te);
+  float cy = lerp(OFFY + cAnimMove.fr * CELL + CELL / 2.0f, OFFY + cAnimMove.tr * CELL + CELL / 2.0f, te);
+  drawChessGlyph(cx, cy, cAnimPieceType);
+}
+
+void drawCPieces() {
+  for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++) {
+    int p = cboard[r][c];
+    if (p == 0) continue;
+    if (cAnimating && r == cAnimMove.fr && c == cAnimMove.fc) continue;
+    float cx = OFFX + c * CELL + CELL / 2.0f;
+    float cy = OFFY + r * CELL + CELL / 2.0f;
+    drawChessGlyph(cx, cy, p);
+  }
+}
+
+void drawChessGlyph(float cx, float cy, int p) {
+  String[] letters = {"", "P", "N", "B", "R", "Q", "K"};
+  noStroke();
+  fill(0, 90);
+  ellipse(cx + 3, cy + 4, CELL * 0.68f, CELL * 0.68f);
+  fill(cWhite(p) ? color(240) : color(35));
+  stroke(cWhite(p) ? color(90) : color(210));
+  strokeWeight(2);
+  ellipse(cx, cy, CELL * 0.68f, CELL * 0.68f);
+  fill(cWhite(p) ? color(20) : color(235));
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textSize(22);
+  text(letters[cType(p)], cx, cy);
+}
+
+void drawCHighlights() {
+  if (cSelR != -1) {
+    noFill();
+    stroke(80, 220, 255);
+    strokeWeight(3);
+    rect(OFFX + cSelC * CELL, OFFY + cSelR * CELL, CELL, CELL);
+
+    noStroke();
+    fill(80, 220, 255, 150);
+    for (CMove m : cSelMoves) ellipse(OFFX + m.tc * CELL + CELL / 2.0f, OFFY + m.tr * CELL + CELL / 2.0f, 18, 18);
+  }
+}
+
+void handleChessClick(int row, int col) {
+  if (cSelR == -1) {
+    ArrayList<CMove> all = getLegalChessMoves(true);
+    ArrayList<CMove> forThis = new ArrayList<CMove>();
+    for (CMove m : all) if (m.fr == row && m.fc == col) forThis.add(m);
+    if (!forThis.isEmpty()) { cSelR = row; cSelC = col; cSelMoves = forThis; }
+  } else {
+    if (row == cSelR && col == cSelC) { cSelR = -1; cSelMoves.clear(); return; }
+    CMove chosen = null;
+    for (CMove m : cSelMoves) if (m.tr == row && m.tc == col) { chosen = m; break; }
+    if (chosen != null) {
+      cSelR = -1; cSelMoves.clear();
+      startCAnimation(chosen, true);
+    } else if (cboard[row][col] > 0) {
+      ArrayList<CMove> all = getLegalChessMoves(true);
+      ArrayList<CMove> forThis = new ArrayList<CMove>();
+      for (CMove m : all) if (m.fr == row && m.fc == col) forThis.add(m);
+      if (!forThis.isEmpty()) { cSelR = row; cSelC = col; cSelMoves = forThis; }
+    }
+  }
 }
