@@ -1,3 +1,5 @@
+import processing.sound.*;
+
 // =========================================================================
 // CHECKERS vs AI
 // You play RED (moves upward), the computer plays BLACK (moves downward).
@@ -18,13 +20,15 @@ final int CELL = 70;
 final int OFFX = 30, OFFY = 110;
 final int AI_DELAY_MS = 2000; // flat artificial "thinking" pause, same on every difficulty
 
+// Difficulty = search depth, plus a chance of a deliberately weaker move on Easy.
 final int[] DEPTHS       = {2, 6, 8, 10};
-final float[] RANDOMNESS = {0.45f, 0f, 0f, 0f};
-final float BLUNDER_CHANCE = 1.0f / 25.0f;
+final float[] RANDOMNESS = {0.45f, 0f, 0f, 0f}; // chance Easy ignores the best move
+final float BLUNDER_CHANCE = 1.0f / 25.0f; // on every difficulty, a 1-in-25 chance the AI deliberately plays its worst move
 final String[] DIFF_NAMES = {"Easy", "Medium", "Hard", "Insane"};
-int difficulty = 1;
+int difficulty = 1; // 0=Easy, 1=Medium (default), 2=Hard, 3=Insane
 
-final int ANIM_STEP_MS = 220;
+// ---- slide animation state ----
+final int ANIM_STEP_MS = 220; // duration of a single hop (a multi-jump animates hop by hop)
 boolean animating = false;
 Move animMove = null;
 boolean animIsRedMove = false;
@@ -33,7 +37,7 @@ int animStepStart = 0;
 int animPieceType = 0;
 
 int[][] board = new int[SIZE][SIZE];
-boolean redTurn = true;
+boolean redTurn = true;      // human (red) moves first
 boolean gameOver = false;
 String statusMsg = "";
 boolean aiPending = false;
@@ -42,15 +46,56 @@ int aiPendingStart = -1;
 int selR = -1, selC = -1;
 ArrayList<Move> selectedMoves = new ArrayList<Move>();
 
+// ---- menu music ----
+SoundFile menuMusic;
+boolean musicOn = false;
+boolean musicMenuOpen = false;
+ArrayList<String> musicPaths = new ArrayList<String>();
+ArrayList<String> musicNames = new ArrayList<String>();
+int currentMusicIndex = -1;
+String pendingMusicPath = null;
+
+final float MUSIC_BTN_X = 30, MUSIC_BTN_Y_OFFSET = 51, MUSIC_BTN_SIZE = 44;
+float musicBtnY() { return height - MUSIC_BTN_Y_OFFSET; }
+
+// ---- filler buttons: timer / volume / mute / debug ----
+final float FILLER_Y = 706;
+final float VOL_READOUT_Y = 674; // just below the board, above the knob
+float fillerBtnX(int i) { return 35 + i * 140; }
+
+boolean timerOn = false;
+int timerStartMillis = 0;
+boolean debugOn = false;
+
+// ---- volume knob (0-100, drag vertically to adjust) ----
+float knobValue = 80;
+boolean knobDragging = false;
+float knobDragStartY = 0;
+float knobDragStartValue = 0;
+final float KNOB_R = 15;
+float knobCX() { return fillerBtnX(1) + 65; }
+float knobCY() { return FILLER_Y + 15; }
+
 class Move {
   ArrayList<int[]> path = new ArrayList<int[]>();
   ArrayList<int[]> captured = new ArrayList<int[]>();
 }
 
+// =========================================================================
 void setup() {
-  size(620, 780);
+  size(620, 820);
   surface.setTitle("Checkers vs AI");
   initBoard();
+
+  try {
+    File f = new File(dataPath("menu_music.mp3"));
+    if (f.exists()) {
+      musicPaths.add(f.getAbsolutePath());
+      musicNames.add("Popular-feat: Playboy Carti, Madonna, and the Weekend");
+    }
+  } catch (Exception e) {
+    println("No menu music found.");
+  }
 }
 
 void initBoard() {
@@ -74,8 +119,15 @@ void initBoard() {
   statusMsg = "Your move (red)";
 }
 
+// =========================================================================
 void draw() {
   if (chessMode) updateCAnimation(); else updateAnimation();
+
+  if (pendingMusicPath != null) {
+    String p = pendingMusicPath;
+    pendingMusicPath = null;
+    addMusicTrack(p);
+  }
 
   background(40);
   drawBoard();
@@ -167,23 +219,280 @@ void drawUI() {
 
   drawDifficultyButtons();
 
-  fill(80, 200, 130);
-  stroke(255);
-  strokeWeight(1);
-  rect(width / 2 - 70, height - 46, 140, 34, 8);
-  fill(20);
+  boolean newGameHov = hit(width / 2 - 70, height - 46, 140, 34);
+  boolean newGamePressed = newGameHov && mousePressed;
+  float newGameLabelY = drawPixelButton(width / 2 - 70, height - 46, 140, 34, newGamePressed, newGameHov, PBTN_GREEN);
+  fill(30);
   noStroke();
-  textSize(15);
-  text("New Game", width / 2, height - 29);
-
-  fill(90, 140, 220);
-  stroke(255);
-  strokeWeight(1);
-  rect(width - 170, height - 46, 150, 34, 8);
-  fill(20);
-  noStroke();
+  textAlign(CENTER, CENTER);
   textSize(14);
-  text(chessMode ? "Switch to Checkers" : "Switch to Chess", width - 95, height - 29);
+  text("New Game", width / 2, newGameLabelY);
+
+  boolean switchHov = hit(width - 170, height - 46, 150, 34);
+  boolean switchPressed = switchHov && mousePressed;
+  float switchLabelY = drawPixelButton(width - 170, height - 46, 150, 34, switchPressed, switchHov, PBTN_BLUE);
+  fill(25);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textSize(13);
+  text(chessMode ? "Switch to Checkers" : "Switch to Chess", width - 95, switchLabelY);
+
+  drawMusicButton();
+  drawFillerButtons();
+  drawTimerAndDebug();
+  if (musicMenuOpen) drawMusicMenu();
+}
+
+void drawFillerButtons() {
+  boolean tHov = hit(fillerBtnX(0), FILLER_Y, 130, 30);
+  float tLabelY = drawPixelButton(fillerBtnX(0), FILLER_Y, 130, 30, timerOn, tHov, PBTN_ORANGE);
+  fill(30);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textSize(12);
+  text("Timer", fillerBtnX(0) + 65, tLabelY);
+
+  drawVolumeReadout();
+  drawVolumeKnob();
+
+  boolean dHov = hit(fillerBtnX(2), FILLER_Y, 130, 30);
+  float dLabelY = drawPixelButton(fillerBtnX(2), FILLER_Y, 130, 30, debugOn, dHov, PBTN_ORANGE);
+  fill(30);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textSize(12);
+  text("Debug", fillerBtnX(2) + 65, dLabelY);
+}
+
+// a round rotary-style knob; drag vertically to set 0-100 (sidesteps angle
+// wraparound issues a true click-and-rotate control would have)
+void drawVolumeKnob() {
+  float cx = knobCX(), cy = knobCY(), r = KNOB_R;
+  boolean hov = dist(mouseX, mouseY, cx, cy) <= r;
+
+  color baseC  = (hov || knobDragging) ? lerpColor(PBTN_ORANGE, color(255), 0.2f) : PBTN_ORANGE;
+  color ring1  = lerpColor(PBTN_ORANGE, PBTN_SHADE, 0.35f);
+  color ring2  = lerpColor(PBTN_ORANGE, PBTN_SHADE, 0.7f);
+
+  noStroke();
+  fill(ring2);
+  ellipse(cx, cy, r * 2 + 8, r * 2 + 8);
+  fill(ring1);
+  ellipse(cx, cy, r * 2 + 4, r * 2 + 4);
+  fill(baseC);
+  ellipse(cx, cy, r * 2, r * 2);
+  noFill();
+  stroke(PBTN_OUTLINE);
+  strokeWeight(1.5f);
+  ellipse(cx, cy, r * 2, r * 2);
+
+  // indicator sweeps 280 degrees, leaving a gap at the bottom like a real knob
+  float ang = map(knobValue, 0, 100, radians(-140), radians(140));
+  stroke(30);
+  strokeWeight(2);
+  line(cx, cy, cx + cos(ang) * r * 0.75f, cy + sin(ang) * r * 0.75f);
+
+}
+
+// small LCD-style readout box showing the current volume, sitting right above the knob
+void drawVolumeReadout() {
+  float w = 90, h = 24;
+  float x = knobCX() - w / 2;
+  float y = VOL_READOUT_Y;
+
+  fill(25, 25, 32);
+  stroke(PBTN_OUTLINE);
+  strokeWeight(1.5f);
+  rect(x, y, w, h, 6);
+
+  fill(PBTN_YELLOW);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textSize(13);
+  text("Vol: " + round(knobValue), x + w / 2, y + h / 2);
+}
+
+void drawTimerAndDebug() {
+  if (timerOn) {
+    int secs = (millis() - timerStartMillis) / 1000;
+    fill(255);
+    noStroke();
+    textAlign(LEFT, CENTER);
+    textSize(13);
+    text(nf(secs / 60, 2) + ":" + nf(secs % 60, 2), 10, 10);
+  }
+  if (debugOn) {
+    fill(255);
+    noStroke();
+    textAlign(RIGHT, CENTER);
+    textSize(13);
+    text(round(frameRate) + " fps", width - 10, 10);
+  }
+}
+
+// =========================================================================
+// PIXEL-ART BUTTON (chunky, layered, raised when idle / sunken when "pressed")
+// =========================================================================
+color PBTN_GREEN   = color(176, 219, 110);
+color PBTN_ORANGE  = color(232, 151, 58);
+color PBTN_BLUE    = color(91, 155, 213);
+color PBTN_YELLOW  = color(240, 221, 123); // top highlight strip - stays the same warm tone on every color
+color PBTN_SHADE   = color(20, 20, 30);    // everything darkens toward this for the side/base bands
+color PBTN_OUTLINE = color(18, 18, 24);
+
+void topChamferRect(float x, float y, float w, float h, float c, color col) {
+  fill(col);
+  noStroke();
+  beginShape();
+  vertex(x + c, y); vertex(x + w - c, y); vertex(x + w, y + c);
+  vertex(x + w, y + h); vertex(x, y + h); vertex(x, y + c);
+  endShape(CLOSE);
+}
+
+void bottomChamferRect(float x, float y, float w, float h, float c, color col) {
+  fill(col);
+  noStroke();
+  beginShape();
+  vertex(x, y); vertex(x + w, y); vertex(x + w, y + h - c);
+  vertex(x + w - c, y + h); vertex(x + c, y + h); vertex(x, y + h - c);
+  endShape(CLOSE);
+}
+
+void chamferOutline(float x, float y, float w, float h, float c) {
+  noFill();
+  stroke(PBTN_OUTLINE);
+  strokeWeight(2);
+  beginShape();
+  vertex(x + c, y); vertex(x + w - c, y); vertex(x + w, y + c); vertex(x + w, y + h - c);
+  vertex(x + w - c, y + h); vertex(x + c, y + h); vertex(x, y + h - c); vertex(x, y + c);
+  endShape(CLOSE);
+}
+
+// Draws a chunky layered button. pressed=true sinks it down to its base (like the
+// reference image's "clicked" state); pressed=false shows it fully raised.
+// Returns the y-coordinate to vertically center a text label on the top face.
+float drawPixelButton(float x, float y, float w, float h, boolean pressed, boolean hover, color base) {
+  float baseY = y + h;
+  float totalH = pressed ? h * 0.55f : h;
+  float topY = baseY - totalH;
+  float chamfer = min(min(w, totalH) * 0.16f, 8);
+
+  color topColor  = (hover && !pressed) ? lerpColor(base, color(255), 0.22f) : base;
+  color side1     = lerpColor(base, PBTN_SHADE, 0.35f);
+  color side2     = lerpColor(base, PBTN_SHADE, 0.55f);
+  color baseShade = lerpColor(base, PBTN_SHADE, 0.80f);
+
+  if (!pressed) {
+    float faceH = totalH * 0.42f;
+    float s1H   = totalH * 0.16f;
+    float s2H   = totalH * 0.16f;
+    float navyH = totalH - faceH - s1H - s2H;
+
+    topChamferRect(x, topY, w, faceH, chamfer, topColor);
+    fill(PBTN_YELLOW);
+    noStroke();
+    rect(x + chamfer * 0.7f, topY + chamfer * 0.6f, w - chamfer * 1.4f, faceH * 0.22f);
+    fill(side1);
+    rect(x, topY + faceH, w, s1H);
+    fill(side2);
+    rect(x, topY + faceH + s1H, w, s2H);
+    bottomChamferRect(x, topY + faceH + s1H + s2H, w, navyH, chamfer, baseShade);
+
+    stroke(PBTN_OUTLINE);
+    strokeWeight(1.2f);
+    line(x, topY + faceH, x + w, topY + faceH);
+    line(x, topY + faceH + s1H, x + w, topY + faceH + s1H);
+    line(x, topY + faceH + s1H + s2H, x + w, topY + faceH + s1H + s2H);
+
+    chamferOutline(x, topY, w, totalH, chamfer);
+    return topY + faceH / 2;
+  } else {
+    float faceH = totalH * 0.38f;
+    float navyH = totalH - faceH;
+
+    topChamferRect(x, topY, w, faceH, chamfer, topColor);
+    fill(PBTN_YELLOW);
+    noStroke();
+    rect(x + chamfer * 0.7f, topY + chamfer * 0.6f, w - chamfer * 1.4f, faceH * 0.22f);
+    bottomChamferRect(x, topY + faceH, w, navyH, chamfer, baseShade);
+
+    stroke(PBTN_OUTLINE);
+    strokeWeight(1.2f);
+    line(x, topY + faceH, x + w, topY + faceH);
+
+    chamferOutline(x, topY, w, totalH, chamfer);
+    return topY + faceH / 2;
+  }
+}
+
+// square icon button, bottom-left: raised idle/hover, sinks down while the menu is open
+void drawMusicButton() {
+  boolean hov = hit(MUSIC_BTN_X, musicBtnY(), MUSIC_BTN_SIZE, MUSIC_BTN_SIZE);
+  float labelY = drawPixelButton(MUSIC_BTN_X, musicBtnY(), MUSIC_BTN_SIZE, MUSIC_BTN_SIZE, musicMenuOpen, hov, PBTN_GREEN);
+  fill(35);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textSize(16);
+  text("M", MUSIC_BTN_X + MUSIC_BTN_SIZE / 2, labelY);
+}
+
+// ---------- music menu panel ----------
+float mpX = 140, mpY = 140, mpW = 340, mpH = 400;
+float mpRowH = 36;
+float mpAddBtnH = 38;
+
+void drawMusicMenu() {
+  fill(15, 15, 15, 235);
+  stroke(70, 200, 220);
+  strokeWeight(2);
+  rect(mpX, mpY, mpW, mpH, 12);
+
+  fill(255);
+  textAlign(CENTER, CENTER);
+  textSize(20);
+  text("Music", mpX + mpW / 2, mpY + 26);
+
+  int maxRows = 7;
+  for (int i = 0; i < musicNames.size() && i < maxRows; i++) {
+    float ry = mpY + 50 + i * mpRowH;
+    float rw = mpW - 24;
+    float rh = mpRowH - 6;
+    boolean hov = hit(mpX + 12, ry, rw, rh);
+    boolean playing = (i == currentMusicIndex && musicOn);
+    float labelY = drawPixelButton(mpX + 12, ry, rw, rh, playing, hov, PBTN_GREEN);
+    fill(30);
+    noStroke();
+    textAlign(LEFT, CENTER);
+    textSize(12);
+    text(shorten(musicNames.get(i), 30), mpX + 24, labelY);
+  }
+  if (musicNames.size() > maxRows) {
+    fill(160);
+    textAlign(CENTER, CENTER);
+    textSize(12);
+    text("+" + (musicNames.size() - maxRows) + " more", mpX + mpW / 2, mpY + 50 + maxRows * mpRowH + 8);
+  }
+  if (musicNames.isEmpty()) {
+    fill(160);
+    textAlign(CENTER, CENTER);
+    textSize(13);
+    text("No songs yet - add one below", mpX + mpW / 2, mpY + 90);
+  }
+
+  float addY = mpY + mpH - mpAddBtnH - 14;
+  float addW = mpW - 40;
+  boolean addHov = hit(mpX + 20, addY, addW, mpAddBtnH);
+  boolean addPressed = addHov && mousePressed;
+  float addLabelY = drawPixelButton(mpX + 20, addY, addW, mpAddBtnH, addPressed, addHov, PBTN_GREEN);
+  fill(30);
+  noStroke();
+  textAlign(CENTER, CENTER);
+  textSize(14);
+  text("+ Add MP3 File", mpX + mpW / 2, addLabelY);
+}
+
+String shorten(String s, int n) {
+  return s.length() > n ? s.substring(0, n - 3) + "..." : s;
 }
 
 float diffBtnX(int i) { return 35 + i * 140; }
@@ -192,25 +501,25 @@ void drawDifficultyButtons() {
   for (int i = 0; i < 4; i++) {
     boolean active = (i == difficulty);
     boolean hov = hit(diffBtnX(i), 48, 130, 28);
-    fill(active ? color(80, 200, 130) : (hov ? color(90) : color(65)));
-    stroke(255, 160);
-    strokeWeight(1);
-    rect(diffBtnX(i), 48, 130, 28, 6);
-    fill(active ? 20 : 230);
+    float labelY = drawPixelButton(diffBtnX(i), 48, 130, 28, active, hov, PBTN_ORANGE);
+    fill(30);
     noStroke();
     textAlign(CENTER, CENTER);
-    textSize(14);
-    text(DIFF_NAMES[i], diffBtnX(i) + 65, 63);
+    textSize(13);
+    text(DIFF_NAMES[i], diffBtnX(i) + 65, labelY);
   }
 }
 
+// =========================================================================
+// SLIDE ANIMATION
+// =========================================================================
 void startAnimation(Move m, boolean wasRedMove) {
   animMove = m;
   animIsRedMove = wasRedMove;
   animIndex = 0;
   animStepStart = millis();
   int[] src = m.path.get(0);
-  animPieceType = board[src[0]][src[1]];
+  animPieceType = board[src[0]][src[1]]; // board not mutated yet - safe to read here
   animating = true;
 }
 
@@ -232,7 +541,7 @@ void drawAnimPiece() {
   int[] from = animMove.path.get(animIndex);
   int[] to = animMove.path.get(animIndex + 1);
   float t = constrain((millis() - animStepStart) / (float) ANIM_STEP_MS, 0, 1);
-  float te = t * t * (3 - 2 * t);
+  float te = t * t * (3 - 2 * t); // smoothstep easing
 
   float cx = lerp(OFFX + from[1] * CELL + CELL / 2.0f, OFFX + to[1] * CELL + CELL / 2.0f, te);
   float cy = lerp(OFFY + from[0] * CELL + CELL / 2.0f, OFFY + to[0] * CELL + CELL / 2.0f, te);
@@ -256,6 +565,8 @@ void drawAnimPiece() {
   }
 }
 
+// while mid-slide, hide the square the piece departed from, plus any
+// enemy pieces already jumped over so far in a multi-jump
 boolean isHiddenDuringAnim(int r, int c) {
   if (!animating) return false;
   int[] src = animMove.path.get(0);
@@ -267,6 +578,8 @@ boolean isHiddenDuringAnim(int r, int c) {
   return false;
 }
 
+// called once the slide reaches its final square: commits the move to the
+// real board and runs the same post-move logic the old instant-move code did
 void finishAnimatedMove() {
   board = applyMove(board, animMove);
   boolean wasRed = animIsRedMove;
@@ -296,6 +609,9 @@ void finishAnimatedMove() {
   }
 }
 
+// =========================================================================
+// PIECE HELPERS
+// =========================================================================
 boolean isRed(int p)   { return p == RED || p == RED_KING; }
 boolean isBlack(int p) { return p == BLACK || p == BLACK_KING; }
 boolean isKing(int p)  { return p == RED_KING || p == BLACK_KING; }
@@ -306,7 +622,7 @@ int[][] jumpDirs(int piece) {
     return new int[][]{{-1,-1},{-1,1},{1,-1},{1,1}};
   if (piece == RED)
     return new int[][]{{-1,-1},{-1,1}};
-  return new int[][]{{1,-1},{1,1}};
+  return new int[][]{{1,-1},{1,1}}; // BLACK man
 }
 
 int[][] copyBoard(int[][] b) {
@@ -315,6 +631,11 @@ int[][] copyBoard(int[][] b) {
   return nb;
 }
 
+// =========================================================================
+// MOVE GENERATION
+// =========================================================================
+// Captures are optional now: this returns every legal move (jumps AND plain
+// steps) for the side, rather than forcing a jump whenever one is available.
 ArrayList<Move> getAllMoves(int[][] b, boolean redSide) {
   ArrayList<Move> moves = new ArrayList<Move>();
 
@@ -350,6 +671,7 @@ ArrayList<Move> getAllMoves(int[][] b, boolean redSide) {
   return moves;
 }
 
+// recursively extends a jump sequence; records a Move each time a branch runs out of further jumps
 void findCaptures(int[][] b, int r, int c, ArrayList<int[]> path, ArrayList<int[]> captured, ArrayList<Move> results, boolean redSide) {
   int piece = b[r][c];
   boolean found = false;
@@ -402,6 +724,9 @@ int[][] applyMove(int[][] b, Move m) {
   return nb;
 }
 
+// =========================================================================
+// AI: minimax with alpha-beta pruning (maximizes for BLACK)
+// =========================================================================
 float evaluate(int[][] b) {
   float score = 0;
   for (int r = 0; r < SIZE; r++) {
@@ -418,7 +743,7 @@ float evaluate(int[][] b) {
 
 float minimax(int[][] b, int depth, float alpha, float beta, boolean blackToMove) {
   ArrayList<Move> moves = getAllMoves(b, !blackToMove);
-  if (moves.isEmpty()) return blackToMove ? -1000 : 1000;
+  if (moves.isEmpty()) return blackToMove ? -1000 : 1000; // side to move has no moves = they lose
   if (depth == 0) return evaluate(b);
 
   if (blackToMove) {
@@ -469,9 +794,12 @@ void performAIMove() {
 
   Move chosenMove = bestMove;
 
+  // Easy occasionally throws away the best move in favor of a random legal one
   if (random(1) < RANDOMNESS[difficulty]) {
     chosenMove = moves.get(int(random(moves.size())));
   }
+  // every difficulty has a small chance of deliberately walking into its
+  // worst available spot, so the AI isn't flawless even on Hard/Insane
   else if (random(1) < BLUNDER_CHANCE) {
     chosenMove = worstMove;
   }
@@ -479,7 +807,36 @@ void performAIMove() {
   startAnimation(chosenMove, false);
 }
 
+// =========================================================================
+// INTERACTION
+// =========================================================================
 void mousePressed() {
+  if (hit(MUSIC_BTN_X, musicBtnY(), MUSIC_BTN_SIZE, MUSIC_BTN_SIZE)) {
+    musicMenuOpen = !musicMenuOpen;
+    return;
+  }
+
+  if (dist(mouseX, mouseY, knobCX(), knobCY()) <= KNOB_R) {
+    knobDragging = true;
+    knobDragStartY = mouseY;
+    knobDragStartValue = knobValue;
+    return;
+  }
+  if (hit(fillerBtnX(0), FILLER_Y, 130, 30)) {
+    timerOn = !timerOn;
+    if (timerOn) timerStartMillis = millis();
+    return;
+  }
+  if (hit(fillerBtnX(2), FILLER_Y, 130, 30)) {
+    debugOn = !debugOn;
+    return;
+  }
+
+  if (musicMenuOpen) {
+    handleMusicMenuClick();
+    return;
+  }
+
   for (int i = 0; i < 4; i++) {
     if (hit(diffBtnX(i), 48, 130, 28)) {
       difficulty = i;
@@ -544,6 +901,7 @@ void mousePressed() {
       selR = -1; selectedMoves.clear();
       startAnimation(chosen, true);
     } else if (isRed(board[row][col])) {
+      // clicked a different one of your pieces - try reselecting
       ArrayList<Move> allRed = getAllMoves(board, true);
       ArrayList<Move> forThis = new ArrayList<Move>();
       for (Move m : allRed) {
@@ -562,11 +920,86 @@ boolean hit(float x, float y, float w, float h) {
   return mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
 }
 
+void mouseDragged() {
+  if (knobDragging) {
+    float dy = knobDragStartY - mouseY; // dragging up increases the value
+    knobValue = constrain(knobDragStartValue + dy * 0.6f, 0, 100);
+    applyKnobVolume();
+  }
+}
+
+void mouseReleased() {
+  knobDragging = false;
+}
+
+void applyKnobVolume() {
+  if (menuMusic == null) return;
+  try { menuMusic.amp(knobValue / 100.0f); } catch (Exception e) {}
+}
+
+void handleMusicMenuClick() {
+  int maxRows = 7;
+  for (int i = 0; i < musicNames.size() && i < maxRows; i++) {
+    float ry = mpY + 50 + i * mpRowH;
+    if (hit(mpX + 12, ry, mpW - 24, mpRowH - 6)) {
+      if (i == currentMusicIndex && musicOn) stopMusic();
+      else playMusicTrack(i);
+      return;
+    }
+  }
+
+  float addY = mpY + mpH - mpAddBtnH - 14;
+  if (hit(mpX + 20, addY, mpW - 40, mpAddBtnH)) {
+    selectInput("Choose an MP3 to add", "musicFileSelected");
+    return;
+  }
+
+  if (!hit(mpX, mpY, mpW, mpH)) {
+    musicMenuOpen = false; // clicked outside the panel
+  }
+  // click landed inside the panel but not on a control - absorb it, do nothing
+}
+
+// called by selectInput() on the file-dialog thread: just remember the path,
+// draw() loads it on the main thread
+void musicFileSelected(File selection) {
+  if (selection == null) return;
+  pendingMusicPath = selection.getAbsolutePath();
+}
+
+void addMusicTrack(String path) {
+  String name = new File(path).getName();
+  if (!name.toLowerCase().endsWith(".mp3")) return;
+  musicPaths.add(path);
+  musicNames.add(name);
+}
+
+void playMusicTrack(int index) {
+  try {
+    if (menuMusic != null) menuMusic.stop();
+    menuMusic = new SoundFile(this, musicPaths.get(index));
+    menuMusic.amp(knobValue / 100.0f);
+    menuMusic.loop();
+    currentMusicIndex = index;
+    musicOn = true;
+  } catch (Exception e) {
+    println("Could not play that file.");
+  }
+}
+
+void stopMusic() {
+  if (menuMusic != null) {
+    try { menuMusic.stop(); } catch (Exception e) {}
+  }
+  musicOn = false;
+  currentMusicIndex = -1;
+}
+
 // =========================================================================
 // CHESS MODE
 // =========================================================================
 final int PAWN = 1, KNIGHT = 2, BISHOP = 3, ROOK = 4, QUEEN = 5, KING = 6;
-final int[] CHESS_DEPTHS = {1, 2, 3, 4};
+final int[] CHESS_DEPTHS = {1, 2, 3, 4}; // shallower than checkers - chess has a much bigger branching factor
 
 boolean chessMode = false;
 
@@ -594,7 +1027,7 @@ final int CANIM_MS = 260;
 class CMove {
   int fr, fc, tr, tc;
   boolean castleK = false, castleQ = false, enPassant = false;
-  int epCapR = -1, epCapC = -1;
+  int epCapR = -1, epCapC = -1; // pawn removed by an en passant capture
 }
 
 void initChessBoard() {
@@ -628,6 +1061,7 @@ void toggleMode() {
   }
 }
 
+// ---------- piece helpers ----------
 boolean cWhite(int p) { return p > 0; }
 int cType(int p) { return abs(p); }
 
@@ -637,6 +1071,7 @@ CMove cm(int fr, int fc, int tr, int tc) {
   return m;
 }
 
+// pseudo-legal moves for one piece: normal moves/captures only, no castling/en passant
 ArrayList<CMove> genBasicMoves(int[][] b, int r, int c) {
   ArrayList<CMove> out = new ArrayList<CMove>();
   int p = b[r][c];
@@ -667,7 +1102,7 @@ ArrayList<CMove> genBasicMoves(int[][] b, int r, int c) {
       int nr = r + dr, nc = c + dc;
       if (inBounds(nr, nc) && (b[nr][nc] == 0 || cWhite(b[nr][nc]) != white)) out.add(cm(r, c, nr, nc));
     }
-  } else {
+  } else { // bishop, rook, queen - sliding
     int[][] dirs;
     if (type == BISHOP) dirs = new int[][]{{-1,-1},{-1,1},{1,-1},{1,1}};
     else if (type == ROOK) dirs = new int[][]{{-1,0},{1,0},{0,-1},{0,1}};
@@ -688,6 +1123,7 @@ ArrayList<CMove> genBasicMoves(int[][] b, int r, int c) {
   return out;
 }
 
+// every pseudo-legal move for a side, ignoring castling/en passant - used deep in the AI search
 ArrayList<CMove> genSimpleMoves(int[][] b, boolean white) {
   ArrayList<CMove> out = new ArrayList<CMove>();
   for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++) {
@@ -719,6 +1155,7 @@ int[] findKing(int[][] b, boolean white) {
   return new int[]{-1, -1};
 }
 
+// root-level legal moves: normal moves + castling + en passant, with king-safety filtering
 ArrayList<CMove> getLegalChessMoves(boolean white) {
   ArrayList<CMove> raw = new ArrayList<CMove>();
   for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++) {
@@ -727,6 +1164,7 @@ ArrayList<CMove> getLegalChessMoves(boolean white) {
     raw.addAll(genBasicMoves(cboard, r, c));
   }
 
+  // en passant
   if (epTargetR != -1) {
     int row = white ? 3 : 4;
     if (epPawnR == row) {
@@ -741,6 +1179,7 @@ ArrayList<CMove> getLegalChessMoves(boolean white) {
     }
   }
 
+  // castling
   int homeRow = white ? 7 : 0;
   boolean kingMoved = white ? wKingMoved : bKingMoved;
   boolean rookAMoved = white ? wRookAMoved : bRookAMoved;
@@ -756,6 +1195,7 @@ ArrayList<CMove> getLegalChessMoves(boolean white) {
     }
   }
 
+  // filter out moves that leave your own king in check
   ArrayList<CMove> legal = new ArrayList<CMove>();
   for (CMove m : raw) {
     int[][] sim = copyBoard(cboard);
@@ -766,6 +1206,7 @@ ArrayList<CMove> getLegalChessMoves(boolean white) {
   return legal;
 }
 
+// applies a move to an arbitrary board copy (used for legality checks and the AI's search)
 void simApplyCMove(int[][] b, CMove m) {
   int piece = b[m.fr][m.fc];
   b[m.fr][m.fc] = 0;
@@ -776,6 +1217,7 @@ void simApplyCMove(int[][] b, CMove m) {
   b[m.tr][m.tc] = piece;
 }
 
+// commits a move to the real game state: board + castling rights + en passant tracking
 void applyCMoveReal(CMove m) {
   int piece = cboard[m.fr][m.fc];
   boolean wasDoublePawn = cType(piece) == PAWN && abs(m.tr - m.fr) == 2;
@@ -800,6 +1242,9 @@ void applyCMoveReal(CMove m) {
   }
 }
 
+// =========================================================================
+// CHESS AI
+// =========================================================================
 float cEvaluate(int[][] b) {
   float score = 0;
   for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++) {
@@ -812,7 +1257,7 @@ float cEvaluate(int[][] b) {
     else if (t == BISHOP) v = 3.1f;
     else if (t == ROOK) v = 5;
     else if (t == QUEEN) v = 9;
-    else v = 1000;
+    else v = 1000; // KING
     score += cWhite(p) ? -v : v;
   }
   return score;
@@ -823,7 +1268,7 @@ float cMinimax(int[][] b, int depth, float alpha, float beta, boolean whiteToMov
   ArrayList<CMove> moves = genSimpleMoves(b, whiteToMove);
   if (moves.isEmpty()) return cEvaluate(b);
 
-  if (!whiteToMove) {
+  if (!whiteToMove) { // black (AI) maximizes
     float best = -Float.MAX_VALUE;
     for (CMove m : moves) {
       int[][] nb = copyBoard(b);
@@ -875,6 +1320,9 @@ void performCAIMove() {
   startCAnimation(chosen, false);
 }
 
+// =========================================================================
+// CHESS ANIMATION
+// =========================================================================
 void startCAnimation(CMove m, boolean wasWhite) {
   cAnimMove = m;
   cAnimWasWhite = wasWhite;
@@ -925,11 +1373,14 @@ void drawCAnimPiece() {
   drawChessGlyph(cx, cy, cAnimPieceType);
 }
 
+// =========================================================================
+// CHESS RENDERING
+// =========================================================================
 void drawCPieces() {
   for (int r = 0; r < SIZE; r++) for (int c = 0; c < SIZE; c++) {
     int p = cboard[r][c];
     if (p == 0) continue;
-    if (cAnimating && r == cAnimMove.fr && c == cAnimMove.fc) continue;
+    if (cAnimating && r == cAnimMove.fr && c == cAnimMove.fc) continue; // lifted, drawn separately
     float cx = OFFX + c * CELL + CELL / 2.0f;
     float cy = OFFY + r * CELL + CELL / 2.0f;
     drawChessGlyph(cx, cy, p);
@@ -965,6 +1416,9 @@ void drawCHighlights() {
   }
 }
 
+// =========================================================================
+// CHESS INTERACTION
+// =========================================================================
 void handleChessClick(int row, int col) {
   if (cSelR == -1) {
     ArrayList<CMove> all = getLegalChessMoves(true);
